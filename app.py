@@ -113,4 +113,5 @@ if submit:
     # Predict (assume column order matches training; if not, reorder to match x.columns)
     prediction = model.predict(user_df)
     
+
     st.success(f"Predicted Rental Price: ₹{prediction[0]:,.2f}")
