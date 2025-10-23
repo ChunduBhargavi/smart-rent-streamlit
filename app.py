@@ -3,8 +3,13 @@ import pandas as pd
 import numpy as np
 import pickle
 from datetime import datetime
+from sklearn.preprocessing import OrdinalEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
 
+# ---------------------------
 # Load model and encoder
+# ---------------------------
 @st.cache_resource
 def load_model_and_encoder():
     with open('model.pkl', 'rb') as f:
@@ -15,7 +20,9 @@ def load_model_and_encoder():
 
 model, encoder = load_model_and_encoder()
 
-# Predefined categories (based on notebook uniques; adjust if needed)
+# ---------------------------
+# Predefined options
+# ---------------------------
 type_options = ['BHK1', 'BHK2', 'BHK3', 'BHK4', 'BHK4PLUS', 'RK1', 'PENTHOUSE']
 lease_type_options = ['ANYONE', 'FAMILY', 'BACHELOR', 'COMPANY']
 furnishing_options = ['SEMI_FURNISHED', 'FULLY_FURNISHED', 'NOT_FURNISHED']
@@ -24,18 +31,19 @@ facing_options = ['E', 'NE', 'N', 'SE', 'NW', 'S', 'W', 'SW']
 water_supply_options = ['CORP_BORE', 'CORPORATION', 'BOREWELL']
 building_type_options = ['AP', 'IF', 'IH', 'GC']
 
-# Amenities list
-amenities_list = ['LIFT', 'GYM', 'INTERNET', 'AC', 'CLUB', 'INTERCOM', 'POOL', 'CPA', 'FS', 'SERVANT', 'SECURITY', 'SC', 'GP', 'PARK', 'RWH', 'STP', 'HK', 'PB', 'VP']
+amenities_list = ['LIFT', 'GYM', 'INTERNET', 'AC', 'CLUB', 'INTERCOM', 'POOL', 'CPA', 'FS',
+                  'SERVANT', 'SECURITY', 'SC', 'GP', 'PARK', 'RWH', 'STP', 'HK', 'PB', 'VP']
 
-# Streamlit app
+# ---------------------------
+# Streamlit UI
+# ---------------------------
 st.title("Rental Property Price Predictor")
 
-# Form for inputs
 with st.form(key='rental_form'):
     # Date
     activation_date = st.date_input("Activation Date", value=datetime.today())
     
-    # Location (lat/long)
+    # Location
     latitude = st.number_input("Latitude", value=12.93, format="%.6f")
     longitude = st.number_input("Longitude", value=77.67, format="%.6f")
     
@@ -48,7 +56,7 @@ with st.form(key='rental_form'):
     water_supply = st.selectbox("Water Supply", water_supply_options)
     building_type = st.selectbox("Building Type", building_type_options)
     
-    # Numerical/Bool
+    # Numeric / bool
     property_size = st.number_input("Property Size (sq ft)", min_value=100, value=1400)
     property_age = st.number_input("Property Age (years)", min_value=0, value=4)
     bathroom = st.number_input("Bathrooms", min_value=1, value=2)
@@ -58,21 +66,24 @@ with st.form(key='rental_form'):
     balconies = st.number_input("Balconies", min_value=0, value=2)
     negotiable = st.checkbox("Negotiable", value=True)
     
-    # Amenities checkboxes
+    # Amenities
     st.subheader("Amenities")
     amenities_dict = {}
     for amen in amenities_list:
         amenities_dict[amen] = 1 if st.checkbox(amen, value=False) else 0
-    
+
     submit = st.form_submit_button("Predict Rental Price")
 
+# ---------------------------
+# Prediction logic
+# ---------------------------
 if submit:
-    # --- Extract date parts ---
+    # Date parts
     year = activation_date.year
     month = activation_date.month
     day = activation_date.day
-    
-    # --- Prepare user input dictionary ---
+
+    # Build input dictionary
     user_dict = {
         'month': month,
         'day': day,
@@ -101,58 +112,60 @@ if submit:
 
     user_df = pd.DataFrame([user_dict])
 
-    # --- Ensure categorical columns are strings ---
+    # Ensure categorical columns are strings
     cat_cols = ['type', 'lease_type', 'furnishing', 'parking', 'facing', 'water_supply', 'building_type']
     user_df[cat_cols] = user_df[cat_cols].astype(str)
 
-    # --- Encode categoricals ---
+    # Encode categoricals robustly
     try:
-        from sklearn.preprocessing import OrdinalEncoder
-        from sklearn.compose import ColumnTransformer
+        # Dict of encoders per column
+        if isinstance(encoder, dict):
+            for col in cat_cols:
+                if col in encoder:
+                    user_df[col] = encoder[col].transform(user_df[[col]])
+                else:
+                    st.warning(f"No encoder found for column '{col}'. Using raw value.")
 
-        if isinstance(encoder, OrdinalEncoder):
-            # OrdinalEncoder expects only the categorical columns
+        # Pipeline
+        elif isinstance(encoder, Pipeline):
+            user_df = pd.DataFrame(
+                encoder.transform(user_df),
+                columns=getattr(encoder, "feature_names_in_", [f"col_{i}" for i in range(user_df.shape[1])])
+            )
+
+        # ColumnTransformer
+        elif isinstance(encoder, ColumnTransformer):
+            user_df = pd.DataFrame(
+                encoder.transform(user_df),
+                columns=getattr(encoder, "get_feature_names_out", lambda: [f"col_{i}" for i in range(user_df.shape[1])])()
+            )
+
+        # OrdinalEncoder
+        elif isinstance(encoder, OrdinalEncoder):
             encoded_array = encoder.transform(user_df[cat_cols])
             encoded_df = pd.DataFrame(encoded_array, columns=cat_cols)
             user_df = pd.concat([user_df.drop(columns=cat_cols), encoded_df], axis=1)
 
-        elif isinstance(encoder, ColumnTransformer):
-            # ColumnTransformer handles the whole DataFrame
-            encoded_array = encoder.transform(user_df)
-            # ColumnTransformer may return numpy array, need column names
-            try:
-                columns = encoder.get_feature_names_out()
-            except:
-                columns = [f"col_{i}" for i in range(encoded_array.shape[1])]
-            encoded_df = pd.DataFrame(encoded_array, columns=columns)
-            user_df = encoded_df
-
         else:
-            st.error("Unknown encoder type. Make sure you loaded a valid encoder.")
-            st.stop()
+            st.warning(f"Encoder type {type(encoder)} is unknown. Using raw categorical values.")
 
     except Exception as e:
         st.error(f"Error encoding categorical features: {e}")
         st.stop()
 
-    # --- Add amenities if missing (ensure all expected columns exist) ---
+    # Add all amenities
     amenities_df = pd.DataFrame([amenities_dict])
     user_df = pd.concat([user_df, amenities_df], axis=1, ignore_index=False)
 
-    # --- Reorder columns to match training if possible ---
+    # Reorder columns to match model if possible
     try:
         user_df = user_df[model.feature_names_in_]
     except Exception:
         st.warning("Column order mismatch with model. Proceeding anyway...")
 
-    # --- Predict ---
+    # Make prediction
     try:
         prediction = model.predict(user_df)
         st.success(f"Predicted Rental Price: ₹{prediction[0]:,.2f}")
     except Exception as e:
         st.error(f"Prediction failed: {e}")
-
-
-
-
-
