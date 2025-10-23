@@ -7,9 +7,9 @@ from datetime import datetime
 # Load model and encoder
 @st.cache_resource
 def load_model_and_encoder():
-    with open('regression_model.pkl', 'rb') as f:
+    with open('model.pkl', 'rb') as f:
         model = pickle.load(f)
-    with open('ordinal_encoder.pkl', 'rb') as f:
+    with open('encoder.pkl', 'rb') as f:
         encoder = pickle.load(f)
     return model, encoder
 
@@ -115,3 +115,4 @@ if submit:
     
 
     st.success(f"Predicted Rental Price: ₹{prediction[0]:,.2f}")
+
