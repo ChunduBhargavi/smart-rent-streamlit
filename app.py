@@ -72,7 +72,7 @@ if submit:
     month = activation_date.month
     day = activation_date.day
     
-    # --- Create user dictionary ---
+    # --- Prepare user input dictionary ---
     user_dict = {
         'month': month,
         'day': day,
@@ -94,47 +94,65 @@ if submit:
         'total_floor': total_floor,
         'balconies': balconies,
         'negotiable': 1 if negotiable else 0,
-        # Redundant for backward compatibility
         'gym': amenities_dict['GYM'],
         'lift': amenities_dict['LIFT'],
         'swimming_pool': amenities_dict['POOL']
     }
-    
-    # --- Convert to DataFrame ---
+
     user_df = pd.DataFrame([user_dict])
-    
+
     # --- Ensure categorical columns are strings ---
     cat_cols = ['type', 'lease_type', 'furnishing', 'parking', 'facing', 'water_supply', 'building_type']
     user_df[cat_cols] = user_df[cat_cols].astype(str)
-    
+
     # --- Encode categoricals ---
     try:
-        encoded_array = encoder.transform(user_df[cat_cols])
-        encoded_df = pd.DataFrame(encoded_array, columns=encoder.get_feature_names_out(cat_cols))
+        from sklearn.preprocessing import OrdinalEncoder
+        from sklearn.compose import ColumnTransformer
+
+        if isinstance(encoder, OrdinalEncoder):
+            # OrdinalEncoder expects only the categorical columns
+            encoded_array = encoder.transform(user_df[cat_cols])
+            encoded_df = pd.DataFrame(encoded_array, columns=cat_cols)
+            user_df = pd.concat([user_df.drop(columns=cat_cols), encoded_df], axis=1)
+
+        elif isinstance(encoder, ColumnTransformer):
+            # ColumnTransformer handles the whole DataFrame
+            encoded_array = encoder.transform(user_df)
+            # ColumnTransformer may return numpy array, need column names
+            try:
+                columns = encoder.get_feature_names_out()
+            except:
+                columns = [f"col_{i}" for i in range(encoded_array.shape[1])]
+            encoded_df = pd.DataFrame(encoded_array, columns=columns)
+            user_df = encoded_df
+
+        else:
+            st.error("Unknown encoder type. Make sure you loaded a valid encoder.")
+            st.stop()
+
     except Exception as e:
         st.error(f"Error encoding categorical features: {e}")
         st.stop()
-    
-    # --- Drop original categorical columns and add encoded ones ---
-    user_df = pd.concat([user_df.drop(columns=cat_cols), encoded_df], axis=1)
-    
-    # --- Add all amenities (ensure all expected amenity columns exist) ---
+
+    # --- Add amenities if missing (ensure all expected columns exist) ---
     amenities_df = pd.DataFrame([amenities_dict])
-    # If the model expects more/different amenities, you may need to add missing columns
-    user_df = pd.concat([user_df, amenities_df], axis=1)
-    
-    # --- Reorder columns to match training if needed ---
+    user_df = pd.concat([user_df, amenities_df], axis=1, ignore_index=False)
+
+    # --- Reorder columns to match training if possible ---
     try:
         user_df = user_df[model.feature_names_in_]
-    except:
-        st.warning("Column order mismatch with model. Make sure the feature columns match training.")
-    
+    except Exception:
+        st.warning("Column order mismatch with model. Proceeding anyway...")
+
     # --- Predict ---
     try:
         prediction = model.predict(user_df)
         st.success(f"Predicted Rental Price: ₹{prediction[0]:,.2f}")
     except Exception as e:
         st.error(f"Prediction failed: {e}")
+
+
 
 
 
